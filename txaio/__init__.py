@@ -26,7 +26,7 @@
 
 from __future__ import absolute_import
 
-from txaio.interfaces import IFailedFuture
+from txaio.interfaces import IFailedFuture, ILogger
 
 # This is the API
 # see tx.py for Twisted implementation
@@ -73,7 +73,11 @@ __all__ = (
     'failure_traceback',  # returns a traceback instance from an IFailedFuture
     'failure_format_traceback',  # a string, the formatted traceback
 
+    'make_logger',     # creates an object implementing ILogger
+    'start_logging',   # initializes logging (may grab stdin at this point)
+
     'IFailedFuture',             # describes API for arg to errback()s
+    'ILogger',                   # API for logging
 )
 
 

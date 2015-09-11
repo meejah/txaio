@@ -29,8 +29,9 @@ from __future__ import absolute_import, print_function
 import sys
 import functools
 import traceback
+import logging
 
-from txaio.interfaces import IFailedFuture
+from txaio.interfaces import IFailedFuture, ILogger
 from txaio import _Config
 
 import six
@@ -46,6 +47,12 @@ except ImportError:
     import trollius as asyncio
     from trollius import iscoroutine
     from trollius import Future
+
+    class PrintHandler(logging.Handler):
+        def emit(self, record):
+            print(record)
+    logging.getLogger("trollius").addHandler(PrintHandler())
+
 
 
 config = _Config()
@@ -86,6 +93,32 @@ class FailedFuture(IFailedFuture):
 
 
 # API methods for txaio, exported via the top-level __init__.py
+
+
+class _TxaioHandler(logging.Handler):
+    def emit(self, record):
+        print(record.msg.format(**record.args))
+
+
+class _TxaioLogWrapper(object):
+    def __init__(self, logger):
+        self._logger = logger
+
+        for name in ['critical', 'info']:
+            def _log(msg, **kwargs):
+                # NOTE: turning kwargs into a single-dict-arg on purpose,
+                # since a LogRecord only keeys args, not kwargs.
+                getattr(self._logger, name)(msg, kwargs)
+            setattr(self, name, _log)
+
+
+def make_logger():
+    logger = logging.getLogger()
+    return _TxaioLogWrapper(logger)
+
+
+def start_logging(options=None):
+    logging.basicConfig()
 
 
 def failure_message(fail):

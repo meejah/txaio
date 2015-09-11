@@ -28,8 +28,9 @@ from twisted.python.failure import Failure
 from twisted.internet.defer import maybeDeferred, Deferred, DeferredList
 from twisted.internet.defer import succeed, fail
 from twisted.internet.interfaces import IReactorTime
+from twisted.logger import globalLogBeginner, formatTime
 
-from txaio.interfaces import IFailedFuture
+from txaio.interfaces import IFailedFuture, ILogger
 from txaio import _Config
 
 import six
@@ -41,6 +42,21 @@ config = _Config()
 
 
 IFailedFuture.register(Failure)
+
+
+def make_logger():
+    try:
+        from twisted.logger import Logger
+        ILogger.register(Logger)
+        return Logger()
+    except ImportError:
+        # XXX under what circumstances does this fail?
+        import logging
+        return logging.getLogger()
+
+
+def start_logging(options=None):
+    globalLogBeginner.beginLoggingTo([log_publisher])
 
 
 def failure_message(fail):
