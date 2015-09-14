@@ -24,11 +24,14 @@
 #
 ###############################################################################
 
+import sys
+
 from twisted.python.failure import Failure
 from twisted.internet.defer import maybeDeferred, Deferred, DeferredList
 from twisted.internet.defer import succeed, fail
 from twisted.internet.interfaces import IReactorTime
-from twisted.logger import globalLogBeginner, formatTime
+
+from zope.interface import provider
 
 from txaio.interfaces import IFailedFuture, ILogger
 from txaio import _Config
@@ -39,24 +42,92 @@ using_twisted = True
 using_asyncio = False
 
 config = _Config()
-
+_stderr, _stdout = sys.stderr, sys.stdout
 
 IFailedFuture.register(Failure)
 
+_NEW_LOGGER = False
+try:
+    # if we just demand this, what version of Twisted do we need?
+    # (15.x? 13.2 doesn't work, anyway)
+    from twisted.logger import Logger, formatEvent, ILogObserver, formatTime, globalLogPublisher
+    from twisted.logger import globalLogBeginner, formatTime, LogPublisher, LogLevel
+    ILogger.register(Logger)
+    _NEW_LOGGER = True
+
+except ImportError:
+    from twisted.python import log
+    from functools import partial
+    from zope.interface import Interface
+    class ILogObserver(Interface):
+        pass
+
+    class Logger(ILogger):
+        def __init__(self):
+            levels = ['critical', 'error', 'warn', 'info', 'debug', 'trace']
+            for level in levels:
+                setattr(self, level, partial(self._do_log, level))
+
+        def _do_log(self, level, message, **kwargs):
+            if not _observer:
+                return
+            kwargs['log_level'] = level
+            kwargs['log_message'] = message
+            _observer(kwargs)
+
+        def failure(self, message, **kwargs):
+            if _observer:
+                kwargs['log_level'] = 'critical'
+                _observer(kwargs)
+
 
 def make_logger():
-    try:
-        from twisted.logger import Logger
-        ILogger.register(Logger)
-        return Logger()
-    except ImportError:
-        # XXX under what circumstances does this fail?
-        import logging
-        return logging.getLogger()
+    return Logger()
 
 
-def start_logging(options=None):
-    globalLogBeginner.beginLoggingTo([log_publisher])
+@provider(ILogObserver)
+class _LogObserver(object):
+    """
+    Internal helper.
+
+    An observer which formats events to a given file.
+    """
+    def __init__(self, out, levels):
+        self._file = out
+        self._levels = levels
+
+    def __call__(self, event):
+        if 'log_level' not in event:
+            self._file.write("NO {}\n".format(event))
+        if event["log_level"] not in self._levels:
+            return
+
+        if False:
+            log_sys = event.get("log_namespace", "")
+            if len(log_sys) > 30:
+                log_sys = log_sys[:3] + '..' + log_sys[-25:]
+            msg ="[{:<30}] {}\n".format(log_sys, formatEvent(event))
+            self._file.write(msg)
+
+        msg = '{} {}\n'.format(formatTime(event["log_time"]), formatEvent(event))
+        self._file.write(msg)
+
+
+def start_logging(out=None):
+    """
+    Start logging to the file-like object in ``out``. By default, this
+    is stdout.
+    """
+    if out is None:
+        out = _stdout
+    if _NEW_LOGGER:
+        levels = [LogLevel.critical, LogLevel.error, LogLevel.warn, LogLevel.info, LogLevel.debug]
+    else:
+        levels = ['critical', 'error', 'warn', 'info', 'debug', 'trace']
+    global _observer
+    _observer = _LogObserver(out, levels)
+    if _NEW_LOGGER:
+        globalLogBeginner.beginLoggingTo([_observer])
 
 
 def failure_message(fail):
