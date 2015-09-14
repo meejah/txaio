@@ -25,6 +25,7 @@
 ###############################################################################
 
 import sys
+import traceback
 
 from twisted.python.failure import Failure
 from twisted.internet.defer import maybeDeferred, Deferred, DeferredList
@@ -43,6 +44,7 @@ using_asyncio = False
 
 config = _Config()
 _stderr, _stdout = sys.stderr, sys.stdout
+_observer = None  # we keep this here to support Twisted legacy logging; see below
 
 IFailedFuture.register(Failure)
 
@@ -50,8 +52,9 @@ _NEW_LOGGER = False
 try:
     # if we just demand this, what version of Twisted do we need?
     # (15.x? 13.2 doesn't work, anyway)
-    from twisted.logger import Logger, formatEvent, ILogObserver, formatTime, globalLogPublisher
-    from twisted.logger import globalLogBeginner, formatTime, LogPublisher, LogLevel
+    # globalLogPublisher
+    from twisted.logger import Logger, formatEvent, ILogObserver
+    from twisted.logger import globalLogBeginner, formatTime, LogLevel
     ILogger.register(Logger)
     _NEW_LOGGER = True
 
@@ -59,8 +62,19 @@ except ImportError:
     from twisted.python import log
     from functools import partial
     from zope.interface import Interface
+    from datetime import datetime
+    import time
+
     class ILogObserver(Interface):
         pass
+
+    def formatTime(t):
+        dt = datetime.fromtimestamp(t)
+        return unicode(dt.strftime("%Y-%m-%dT%H:%M:%S%z"))
+
+    def formatEvent(event):
+        msg = event['log_format']
+        return msg.format(**event)
 
     class Logger(ILogger):
         def __init__(self):
@@ -69,16 +83,21 @@ except ImportError:
                 setattr(self, level, partial(self._do_log, level))
 
         def _do_log(self, level, message, **kwargs):
-            if not _observer:
-                return
+            global _observer
+            assert _observer is not None, "Call txaio.start_logging before logging"
+            kwargs['log_time'] = time.time()
             kwargs['log_level'] = level
-            kwargs['log_message'] = message
+            kwargs['log_format'] = message
             _observer(kwargs)
 
         def failure(self, message, **kwargs):
-            if _observer:
-                kwargs['log_level'] = 'critical'
-                _observer(kwargs)
+            global _observer
+            assert _observer is not None, "Call txaio.start_logging before logging"
+            kwargs['log_failure'] = Failure()
+            kwargs['log_level'] = 'critical'
+            kwargs['log_format'] = message
+            kwargs['log_time'] = time.time()
+            _observer(kwargs)
 
 
 def make_logger():
@@ -97,20 +116,30 @@ class _LogObserver(object):
         self._levels = levels
 
     def __call__(self, event):
-        if 'log_level' not in event:
-            self._file.write("NO {}\n".format(event))
+        # XXX FIXME as per discussion, we should make the actual
+        # log-methods no-ops to deal with levels!
         if event["log_level"] not in self._levels:
             return
 
-        if False:
-            log_sys = event.get("log_namespace", "")
-            if len(log_sys) > 30:
-                log_sys = log_sys[:3] + '..' + log_sys[-25:]
-            msg ="[{:<30}] {}\n".format(log_sys, formatEvent(event))
+        # if False:
+        #     log_sys = event.get("log_namespace", "")
+        #     if len(log_sys) > 30:
+        #         log_sys = log_sys[:3] + '..' + log_sys[-25:]
+        #     msg ="[{:<30}] {}\n".format(log_sys, formatEvent(event))
+        #     self._file.write(msg)
+
+        if 'log_failure' in event:
+            self._file.write(
+                '{} {}\n{}'.format(
+                    formatTime(event['log_time']),
+                    event['log_format'],
+                    traceback.format_exc(),
+                )
+            )
+        else:
+            msg = '{} {}\n'.format(formatTime(event["log_time"]), formatEvent(event))
             self._file.write(msg)
 
-        msg = '{} {}\n'.format(formatTime(event["log_time"]), formatEvent(event))
-        self._file.write(msg)
 
 
 def start_logging(out=None):
@@ -128,6 +157,9 @@ def start_logging(out=None):
     _observer = _LogObserver(out, levels)
     if _NEW_LOGGER:
         globalLogBeginner.beginLoggingTo([_observer])
+    else:
+        from twisted.python import log
+        log.startLogging(out)
 
 
 def failure_message(fail):

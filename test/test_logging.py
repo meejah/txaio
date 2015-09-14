@@ -32,20 +32,21 @@ import mock
 
 import logging
 
-from util import run_once
+# from util import run_once
 
-class TestHandler(logging.Handler):
+class TestHandler(object):
     def __init__(self, *args, **kw):
-        logging.Handler.__init__(self, *args, **kw)
         self.messages = []
+        self._data = ''
 
-    def emit(self, record):
-        """built-in logging stuff goes through here"""
-        self.messages.append(record.msg.format(**record.args))
+    def write(self, data):
+        for line in data.split('\n'):
+            line = line.strip()
+            if line:
+                self.messages.append(line)
 
-    def __call__(self, event):
-        """Twisted stuff goes through here"""
-        self.messages.append(event['log_format'].format(**event))
+    def flush(self):
+        pass
 
 
 @pytest.fixture(scope='session')
@@ -53,16 +54,26 @@ def log_started():
     """
     Sets up the logging, which we can only do once per run.
     """
+    # XXX FIXME: py34-twisted has to "do something" to actually-use twisted :/ txaio.use_twisted()
     handler = TestHandler()
+    txaio.start_logging(out=handler)
+    return handler
+"""
     if txaio.using_twisted:
-        from twisted.logger import ILogObserver, formatEvent, Logger, LogPublisher
-        from twisted.logger import LogLevel, globalLogBeginner, formatTime
-        globalLogBeginner.beginLoggingTo([handler])
+# from twisted.logger import ILogObserver, formatEvent, Logger, LogPublisher
+# from twisted.logger import LogLevel, globalLogBeginner, formatTime
+        try:
+            from twisted.logger import globalLogBeginner
+            globalLogBeginner.beginLoggingTo([handler])
+        except ImportError:
+            from twisted.python import log
+            log.startLogging(handler)
     else:
         logging.getLogger().addHandler(handler)
         logging.raiseExceptions = True
         logging.getLogger().setLevel(logging.DEBUG)
     return handler
+"""
 
 
 @pytest.fixture(scope='function')
@@ -84,7 +95,8 @@ def test_critical(handler):
         nouns=['skunk', 'elephant', 'wombat'],
     )
 
-    assert handler.messages == ["hilarious wombat"]
+    assert len(handler.messages) == 1
+    assert handler.messages[0].endswith("hilarious wombat")
 
 def test_info(handler):
     logger = txaio.make_logger()
@@ -96,7 +108,8 @@ def test_info(handler):
         nouns=['skunk', 'elephant', 'wombat'],
     )
 
-    assert handler.messages == ["hilarious elephant"]
+    assert len(handler.messages) == 1
+    assert handler.messages[0].endswith("hilarious elephant")
 
 def test_debug_with_object(handler):
     logger = txaio.make_logger()
@@ -111,10 +124,26 @@ def test_debug_with_object(handler):
         what=Shape(),
     )
 
-    assert handler.messages == ["bar 4 bamboozle"]
+    assert len(handler.messages) == 1
+    assert handler.messages[0].endswith("bar 4 bamboozle")
+
+def test_failure(handler):
+    logger = txaio.make_logger()
+    try:
+        raise RuntimeError("...an inquisition!")
+    except:
+        logger.failure("nobody expects")
+
+    # should have gotten a multi-line error-message
+    if True:
+        assert len(handler.messages) == 5
+        assert handler.messages[1].endswith('Traceback (most recent call last):')
+        assert ' in test_failure' in handler.messages[2]
+        assert handler.messages[3].endswith('RuntimeError("...an inquisition!")')
+        assert handler.messages[4].endswith("RuntimeError: ...an inquisition!")
 
 @pytest.mark.skipif(txaio.using_twisted, reason="only for asyncio")
-def test_aio_handler():
+def __test_aio_handler():
     from txaio.aio import _TxaioHandler
     handler = _TxaioHandler()
 

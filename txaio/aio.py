@@ -27,6 +27,8 @@
 from __future__ import absolute_import, print_function
 
 import sys
+import time
+from datetime import datetime
 import functools
 import traceback
 import logging
@@ -54,9 +56,9 @@ except ImportError:
     logging.getLogger("trollius").addHandler(PrintHandler())
 
 
-
 config = _Config()
 config.loop = asyncio.get_event_loop()
+_stderr, _stdout = sys.stderr, sys.stdout
 
 using_twisted = False
 using_asyncio = True
@@ -95,21 +97,47 @@ class FailedFuture(IFailedFuture):
 # API methods for txaio, exported via the top-level __init__.py
 
 
-class _TxaioHandler(logging.Handler):
-    def emit(self, record):
-        print(record.msg.format(**record.args))
-
-
-class _TxaioLogWrapper(object):
+class _TxaioLogWrapper(ILogger):
     def __init__(self, logger):
         self._logger = logger
 
         for name in ['critical', 'info']:
             def _log(msg, **kwargs):
-                # NOTE: turning kwargs into a single-dict-arg on purpose,
-                # since a LogRecord only keeys args, not kwargs.
+                # NOTE: turning kwargs into a single "argument which
+                # is a dict" on purpose, since a LogRecord only keeps
+                # args, not kwargs.
+                kwargs['log_time'] = time.time()
+                kwargs['log_level'] = name
+                kwargs['log_message'] = msg
                 getattr(self._logger, name)(msg, kwargs)
             setattr(self, name, _log)
+
+    def failure(self, message, **kwargs):
+        kwargs['log_failure'] = FailedFuture(*sys.exc_info())
+        kwargs['log_level'] = 'critical'
+        kwargs['log_message'] = message
+        kwargs['log_time'] = time.time()
+        # we really do want kwargs to become a single argument-that's a
+        # dict here.
+        self._logger.critical(message, kwargs)
+        for line in traceback.format_exception(*sys.exc_info()):
+            kwargs['log_message'] = line
+            self._logger.critical(line, kwargs)
+
+
+class _TxaioFileHandler(logging.Handler):
+    def __init__(self, fileobj, **kw):
+        super(_TxaioFileHandler, self).__init__(**kw)
+        self._file = fileobj
+
+    def emit(self, record):
+        fmt = record.args['log_message']
+        dt = datetime.fromtimestamp(record.args['log_time'])
+        msg = '{} {}\n'.format(
+            dt.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            fmt.format(**record.args),
+        )
+        self._file.write(msg)
 
 
 def make_logger():
@@ -117,8 +145,15 @@ def make_logger():
     return _TxaioLogWrapper(logger)
 
 
-def start_logging(options=None):
-    logging.basicConfig()
+def start_logging(out=None):
+    if out is None:
+        out = _stdout
+    handler = _TxaioFileHandler(out)
+    logging.getLogger().addHandler(handler)
+    # note: Don't need to call basicConfig() or similar, because we've
+    # now added at least one handler to the root logger
+    logging.raiseExceptions = True  # FIXME
+    logging.getLogger().setLevel(logging.DEBUG)  # FIXME
 
 
 def failure_message(fail):
