@@ -27,7 +27,6 @@
 import sys
 import weakref
 import inspect
-import traceback
 
 from twisted.python.failure import Failure
 from twisted.internet.defer import maybeDeferred, Deferred, DeferredList
@@ -53,7 +52,7 @@ _stderr, _stdout = sys.stderr, sys.stdout
 # time as start_logging is called (with the desired log-level) and
 # then we call _set_log_level on each instance. After that,
 # _TxLogger's ctor uses _log_level directly.
-_observer = None     # we keep this here to support Twisted legacy logging; see below
+_observer = None     # for Twisted legacy logging support; see below
 _loggers = []        # list of weak-references of each logger we've created
 _log_level = 'info'  # global log level; possibly changed in start_logging()
 
@@ -63,13 +62,12 @@ _NEW_LOGGER = False
 try:
     # Twisted 15+
     from twisted.logger import Logger, formatEvent, ILogObserver
-    from twisted.logger import globalLogBeginner, formatTime, LogLevel
+    from twisted.logger import globalLogBeginner, formatTime
     ILogger.register(Logger)
     _NEW_LOGGER = True
 
 except ImportError:
     # we still support Twisted 12 and 13, which doesn't have new-logger
-    from twisted.python import log
     from functools import partial
     from zope.interface import Interface
     from datetime import datetime
@@ -99,12 +97,14 @@ except ImportError:
 
         def _do_log(self, level, message, **kwargs):
             global _observer
-            assert _observer is not None, "Call txaio.start_logging before actually logging"
             kwargs['log_time'] = time.time()
             kwargs['log_level'] = level
             kwargs['log_format'] = message
             kwargs['log_namespace'] = self.namespace
-            _observer(kwargs)
+            # NOTE: the other loggers are ignoring any log messages
+            # before start_logging() as well
+            if _observer:
+                _observer(kwargs)
 
 
 def _no_op(*args, **kwargs):
@@ -189,27 +189,28 @@ def start_logging(out=None, level='info'):
     Start logging to the file-like object in ``out``. By default, this
     is stdout.
     """
+    global _loggers, _observer
+
     if level not in log_levels:
         raise RuntimeError(
             "Invalid log level '{}'; valid are: {}".format(
                 level, ', '.join(log_levels)
             )
         )
+
+    if _loggers is None:
+        raise RuntimeError("start_logging() may only be called once")
+
     if out is None:
         out = _stdout
 
-    global _loggers
-    for ref in _loggers:
-        instance = ref()
-        if instance:
-            instance._set_log_level(level)
+    if _loggers is not None:
+        for ref in _loggers:
+            instance = ref()
+            if instance:
+                instance._set_log_level(level)
     _loggers = None
 
-    # if _NEW_LOGGER:
-    #     levels = [LogLevel.critical, LogLevel.error, LogLevel.warn, LogLevel.info, LogLevel.debug]
-    # else:
-    #     levels = ['critical', 'error', 'warn', 'info', 'debug', 'trace']
-    global _observer
     _observer = _LogObserver(out)
     if _NEW_LOGGER:
         globalLogBeginner.beginLoggingTo([_observer])

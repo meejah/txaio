@@ -29,7 +29,8 @@ from __future__ import absolute_import
 import abc
 import six
 
-log_levels=[
+#: all the log-levels that txaio recognizes
+log_levels = [
     'critical',
     'error',
     'warn',
@@ -37,6 +38,7 @@ log_levels=[
     'debug',
     'trace',
 ]
+
 
 @six.add_metaclass(abc.ABCMeta)
 class ILogger(object):

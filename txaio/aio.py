@@ -60,8 +60,8 @@ except ImportError:
 config = _Config()
 config.loop = asyncio.get_event_loop()
 _stderr, _stdout = sys.stderr, sys.stdout
-_loggers = []  # list of weak-references of each logger we've created
-_log_level = None  # non-None if we've called start_logging()
+_loggers = []  # weak-references of each logger we've created before start_logging()
+_log_level = 'info'  # re-set by start_logging
 
 using_twisted = False
 using_asyncio = True
@@ -110,21 +110,17 @@ def _log(logger, level, msg, **kwargs):
         level = 'debug'
     getattr(logger._logger, level)(msg, kwargs)
 
+
 def _no_op(*args, **kw):
     pass
+
 
 class _TxaioLogWrapper(ILogger):
     def __init__(self, logger):
         self._logger = logger
-        self._set_level('trace')
-        return
-        if _log_level is None:
-            self._set_level('info')
-        else:
-            self._set_level(_log_level)
+        self._set_level(_log_level)
 
     def _set_level(self, level):
-        from txaio.interfaces import log_levels
         target_level = log_levels.index(level)
         # this binds either _log or _no_op above to this instance,
         # depending on the desired level.
@@ -155,7 +151,7 @@ def make_logger():
     logger = _TxaioLogWrapper(logging.getLogger())
     # remember this so we can set their levels properly once
     # start_logging is actually called.
-    if _log_level is None:
+    if _loggers is not None:
         _loggers.append(weakref.ref(logger))
     return logger
 
@@ -164,21 +160,20 @@ def start_logging(out=None, level='info'):
     """
     Begin logging.
 
-    :param out: if provided, a file-like object to which logging will be emitted.
+    :param out: if provided, a file-like object to log to
     :param level: the maximum log-level to emit (a string)
     """
-    global _log_level
-    if _log_level is not None:
-        raise RuntimeError("start_logging() may only be called once")
-    _log_level = level
-
-    from txaio.interfaces import log_levels
+    global _log_level, _loggers
     if level not in log_levels:
         raise RuntimeError(
             "Invalid log level '{}'; valid are: {}".format(
                 level, ', '.join(log_levels)
             )
         )
+
+    if _loggers is None:
+        raise RuntimeError("start_logging() may only be called once")
+    _log_level = level
 
     if out is None:
         out = _stdout
@@ -201,7 +196,8 @@ def start_logging(out=None, level='info'):
     for ref in _loggers:
         instance = ref()
         if instance is not None:
-            instance._set_level('trace')#level)
+            instance._set_level(level)
+    _loggers = None
 
 
 def failure_message(fail):

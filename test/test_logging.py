@@ -28,11 +28,7 @@ from __future__ import print_function
 
 import pytest
 import txaio
-import mock
 
-import logging
-
-# from util import run_once
 
 # XXX just use StringIO?
 class TestHandler(object):
@@ -55,6 +51,9 @@ def log_started():
     """
     Sets up the logging, which we can only do once per run.
     """
+    early_log = txaio.make_logger()
+    early_log.info("early log")
+
     handler = TestHandler()
     txaio.start_logging(out=handler, level='debug')
     return handler
@@ -82,6 +81,7 @@ def test_critical(handler):
     assert len(handler.messages) == 1
     assert handler.messages[0].endswith("hilarious wombat")
 
+
 def test_info(handler):
     logger = txaio.make_logger()
 
@@ -94,6 +94,7 @@ def test_info(handler):
 
     assert len(handler.messages) == 1
     assert handler.messages[0].endswith("hilarious elephant")
+
 
 def test_debug_with_object(handler):
     logger = txaio.make_logger()
@@ -111,6 +112,7 @@ def test_debug_with_object(handler):
     assert len(handler.messages) == 1
     assert handler.messages[0].endswith("bar 4 bamboozle")
 
+
 def test_log_noop_trace(handler):
     # trace should be a no-op, because we set the level to 'debug' in
     # the fixture
@@ -119,3 +121,47 @@ def test_log_noop_trace(handler):
     logger.trace("a trace message")
 
     assert len(handler.messages) == 0
+
+
+def test_double_start(handler):
+    try:
+        txaio.start_logging()
+        assert False, "should get exception"
+    except RuntimeError:
+        pass
+
+
+def test_invalid_level():
+    try:
+        txaio.start_logging(level='foo')
+        assert False, "should get exception"
+    except RuntimeError as e:
+        assert 'Invalid log level' in str(e)
+
+
+def test_class_descriptor(handler):
+    class Something(object):
+        log = txaio.make_logger()
+        def do_a_thing(self):
+            self.log.info("doing a thing")
+
+    s = Something()
+    s.do_a_thing()
+
+    assert len(handler.messages) == 1
+    assert handler.messages[0].endswith("doing a thing")
+
+
+def test_class_attribute(handler):
+    class Something(object):
+        def __init__(self):
+            self.log = txaio.make_logger()
+
+        def do_a_thing(self):
+            self.log.info("doing a thing")
+
+    s = Something()
+    s.do_a_thing()
+
+    assert len(handler.messages) == 1
+    assert handler.messages[0].endswith("doing a thing")
