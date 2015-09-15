@@ -56,24 +56,8 @@ def log_started():
     Sets up the logging, which we can only do once per run.
     """
     handler = TestHandler()
-    txaio.start_logging(out=handler)
+    txaio.start_logging(out=handler, level='debug')
     return handler
-"""
-    if txaio.using_twisted:
-# from twisted.logger import ILogObserver, formatEvent, Logger, LogPublisher
-# from twisted.logger import LogLevel, globalLogBeginner, formatTime
-        try:
-            from twisted.logger import globalLogBeginner
-            globalLogBeginner.beginLoggingTo([handler])
-        except ImportError:
-            from twisted.python import log
-            log.startLogging(handler)
-    else:
-        logging.getLogger().addHandler(handler)
-        logging.raiseExceptions = True
-        logging.getLogger().setLevel(logging.DEBUG)
-    return handler
-"""
 
 
 @pytest.fixture(scope='function')
@@ -126,3 +110,12 @@ def test_debug_with_object(handler):
 
     assert len(handler.messages) == 1
     assert handler.messages[0].endswith("bar 4 bamboozle")
+
+def test_log_noop_trace(handler):
+    # trace should be a no-op, because we set the level to 'debug' in
+    # the fixture
+    logger = txaio.make_logger()
+
+    logger.trace("a trace message")
+
+    assert len(handler.messages) == 0
