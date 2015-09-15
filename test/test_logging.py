@@ -55,7 +55,6 @@ def log_started():
     """
     Sets up the logging, which we can only do once per run.
     """
-    # XXX FIXME: py34-twisted has to "do something" to actually-use twisted :/ txaio.use_twisted()
     handler = TestHandler()
     txaio.start_logging(out=handler)
     return handler
