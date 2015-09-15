@@ -80,7 +80,7 @@ except ImportError:
 
     def formatTime(t):
         dt = datetime.fromtimestamp(t)
-        return unicode(dt.strftime("%Y-%m-%dT%H:%M:%S%z"))
+        return six.u(dt.strftime("%Y-%m-%dT%H:%M:%S%z"))
 
     def formatEvent(event):
         msg = event['log_format']
