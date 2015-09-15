@@ -34,6 +34,7 @@ import logging
 
 # from util import run_once
 
+# XXX just use StringIO?
 class TestHandler(object):
     def __init__(self, *args, **kw):
         self.messages = []
@@ -126,37 +127,3 @@ def test_debug_with_object(handler):
 
     assert len(handler.messages) == 1
     assert handler.messages[0].endswith("bar 4 bamboozle")
-
-def test_failure(handler):
-    logger = txaio.make_logger()
-    try:
-        raise RuntimeError("...an inquisition!")
-    except:
-        logger.failure("nobody expects")
-
-    # should have gotten a multi-line error-message
-    if True:
-        assert len(handler.messages) == 5
-        assert handler.messages[1].endswith('Traceback (most recent call last):')
-        assert ' in test_failure' in handler.messages[2]
-        assert handler.messages[3].endswith('RuntimeError("...an inquisition!")')
-        assert handler.messages[4].endswith("RuntimeError: ...an inquisition!")
-
-@pytest.mark.skipif(txaio.using_twisted, reason="only for asyncio")
-def __test_aio_handler():
-    from txaio.aio import _TxaioHandler
-    handler = _TxaioHandler()
-
-    # see if this *really* writes stuff to stdout
-    with mock.patch('sys.stdout') as fakestdout:
-        class FakeRecord(object):
-            msg = '{foo}'
-            args = dict(foo='bar')
-        handler.emit(FakeRecord())
-
-    output = ''
-    for call in fakestdout.mock_calls:
-        if call[0] == 'write':
-            output += ''.join(call[1])
-
-    assert output == 'bar\n'

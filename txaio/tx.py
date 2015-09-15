@@ -25,6 +25,8 @@
 ###############################################################################
 
 import sys
+import weakref
+import inspect
 import traceback
 
 from twisted.python.failure import Failure
@@ -34,7 +36,7 @@ from twisted.internet.interfaces import IReactorTime
 
 from zope.interface import provider
 
-from txaio.interfaces import IFailedFuture, ILogger
+from txaio.interfaces import IFailedFuture, ILogger, log_levels
 from txaio import _Config
 
 import six
@@ -44,21 +46,29 @@ using_asyncio = False
 
 config = _Config()
 _stderr, _stdout = sys.stderr, sys.stdout
-_observer = None  # we keep this here to support Twisted legacy logging; see below
+
+# some book-keeping variables here. _observer is used as a global by
+# the "backwards compatible" (Twisted < 15) loggers. The _loggers list
+# contains weakrefs; we add _TxLogger instances to this *until* such
+# time as start_logging is called (with the desired log-level) and
+# then we call _set_log_level on each instance. After that,
+# _TxLogger's ctor uses _log_level directly.
+_observer = None     # we keep this here to support Twisted legacy logging; see below
+_loggers = []        # list of weak-references of each logger we've created
+_log_level = 'info'  # global log level; possibly changed in start_logging()
 
 IFailedFuture.register(Failure)
 
 _NEW_LOGGER = False
 try:
-    # if we just demand this, what version of Twisted do we need?
-    # (15.x? 13.2 doesn't work, anyway)
-    # globalLogPublisher
+    # Twisted 15+
     from twisted.logger import Logger, formatEvent, ILogObserver
     from twisted.logger import globalLogBeginner, formatTime, LogLevel
     ILogger.register(Logger)
     _NEW_LOGGER = True
 
 except ImportError:
+    # we still support Twisted 12 and 13, which doesn't have new-logger
     from twisted.python import log
     from functools import partial
     from zope.interface import Interface
@@ -77,31 +87,81 @@ except ImportError:
         return msg.format(**event)
 
     class Logger(ILogger):
-        def __init__(self):
-            levels = ['critical', 'error', 'warn', 'info', 'debug', 'trace']
-            for level in levels:
-                setattr(self, level, partial(self._do_log, level))
+        def __init__(self, **kwargs):
+            self.namespace = kwargs.get('namespace', None)
+            if _loggers is not None:
+                _loggers.append(weakref.ref(self))
+            # this class will get overridden by _TxLogger below, so we
+            # bind *every* level here; set_log_level will un-bind
+            # some.
+            for name in log_levels:
+                setattr(self, name, partial(self._do_log, name))
 
         def _do_log(self, level, message, **kwargs):
             global _observer
-            assert _observer is not None, "Call txaio.start_logging before logging"
+            assert _observer is not None, "Call txaio.start_logging before actually logging"
             kwargs['log_time'] = time.time()
             kwargs['log_level'] = level
             kwargs['log_format'] = message
+            kwargs['log_namespace'] = self.namespace
             _observer(kwargs)
 
-        def failure(self, message, **kwargs):
-            global _observer
-            assert _observer is not None, "Call txaio.start_logging before logging"
-            kwargs['log_failure'] = Failure()
-            kwargs['log_level'] = 'critical'
-            kwargs['log_format'] = message
-            kwargs['log_time'] = time.time()
-            _observer(kwargs)
+
+def _no_op(*args, **kwargs):
+    pass
+
+
+# NOTE: beware that twisted.logger._logger.Logger copies itself via an
+# overriden __get__ method when used as recommended as a class
+# descriptor.  So, we override __get__ to just return ``self`` which
+# means ``log_source`` will be wrong, but we don't document that as a
+# key that you can depend on anyway :/
+class _TxLogger(Logger):
+    def __init__(self, *args, **kw):
+        super(_TxLogger, self).__init__(*args, **kw)
+        if _loggers is not None:
+            _loggers.append(weakref.ref(self))
+        self._set_log_level(_log_level)
+
+    def __get__(self, oself, type=None):
+        # this causes the Logger to lie about the "source=", but
+        # otherwise we create a new Logger instance every time we do
+        # "self.log.info()" if we use it like:
+        # class Foo:
+        #     log = make_logger
+        return self
+
+    def _set_log_level(self, level):
+        # up to the desired level, we don't do anything, as we're a
+        # "real" Twisted new-logger; for methods *after* the desired
+        # level, we bind to the no_op method
+        desired_index = log_levels.index(level)
+        for (idx, name) in enumerate(log_levels):
+            if idx > desired_index:
+                setattr(self, name, _no_op)
+
+    def trace(self, *args, **kw):
+        # there is no "trace" level in Twisted -- but this whole
+        # method will be no-op'd unless we are at the 'trace' level.
+        self.debug(*args, **kw)
 
 
 def make_logger():
-    return Logger()
+    # we want the namespace to be the calling context of "make_logger"
+    # -- so we *have* to pass namespace kwarg to Logger (or else it
+    # will always say the context is "make_logger")
+    cf = inspect.currentframe().f_back
+    if "self" in cf.f_locals:
+        # We're probably in a class init or method
+        cls = cf.f_locals["self"].__class__
+        namespace = '{}.{}'.format(cls.__module__, cls.__name__)
+    else:
+        namespace = cf.f_globals["__name__"]
+        if cf.f_code.co_name != "<module>":
+            # If it's not the module, and not in a class instance, add the code
+            # object's name.
+            namespace = namespace + "." + cf.f_code.co_name
+    return _TxLogger(namespace=namespace)
 
 
 @provider(ILogObserver)
@@ -111,50 +171,46 @@ class _LogObserver(object):
 
     An observer which formats events to a given file.
     """
-    def __init__(self, out, levels):
+    def __init__(self, out):
         self._file = out
-        self._levels = levels
 
     def __call__(self, event):
-        # XXX FIXME as per discussion, we should make the actual
-        # log-methods no-ops to deal with levels!
-        if event["log_level"] not in self._levels:
-            return
-
-        # if False:
-        #     log_sys = event.get("log_namespace", "")
-        #     if len(log_sys) > 30:
-        #         log_sys = log_sys[:3] + '..' + log_sys[-25:]
-        #     msg ="[{:<30}] {}\n".format(log_sys, formatEvent(event))
-        #     self._file.write(msg)
-
-        if 'log_failure' in event:
-            self._file.write(
-                '{} {}\n{}'.format(
-                    formatTime(event['log_time']),
-                    event['log_format'],
-                    traceback.format_exc(),
-                )
-            )
-        else:
-            msg = '{} {}\n'.format(formatTime(event["log_time"]), formatEvent(event))
-            self._file.write(msg)
+        # we don't do any filtering on levels here, as our loggers are
+        # already looking for the correct levels.
+        msg = '{} {}\n'.format(
+            formatTime(event["log_time"]),
+            formatEvent(event),
+        )
+        self._file.write(msg)
 
 
-
-def start_logging(out=None):
+def start_logging(out=None, level='info'):
     """
     Start logging to the file-like object in ``out``. By default, this
     is stdout.
     """
+    if level not in log_levels:
+        raise RuntimeError(
+            "Invalid log level '{}'; valid are: {}".format(
+                level, ', '.join(log_levels)
+            )
+        )
     if out is None:
         out = _stdout
-    if _NEW_LOGGER:
-        levels = [LogLevel.critical, LogLevel.error, LogLevel.warn, LogLevel.info, LogLevel.debug]
-    else:
-        levels = ['critical', 'error', 'warn', 'info', 'debug', 'trace']
+
+    global _loggers
+    for ref in _loggers:
+        instance = ref()
+        if instance:
+            instance._set_log_level(level)
+    _loggers = None
+
+    # if _NEW_LOGGER:
+    #     levels = [LogLevel.critical, LogLevel.error, LogLevel.warn, LogLevel.info, LogLevel.debug]
+    # else:
+    #     levels = ['critical', 'error', 'warn', 'info', 'debug', 'trace']
     global _observer
-    _observer = _LogObserver(out, levels)
+    _observer = _LogObserver(out)
     if _NEW_LOGGER:
         globalLogBeginner.beginLoggingTo([_observer])
     else:

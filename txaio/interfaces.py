@@ -29,6 +29,14 @@ from __future__ import absolute_import
 import abc
 import six
 
+log_levels=[
+    'critical',
+    'error',
+    'warn',
+    'info',
+    'debug',
+    'trace',
+]
 
 @six.add_metaclass(abc.ABCMeta)
 class ILogger(object):
@@ -40,26 +48,29 @@ class ILogger(object):
 
     All the log methods have the same signature, they just differ in
     what "log level" they represent to the handlers/emitters. The
-    ``message`` argument is a format string, which can include
-    embedded ``{`` and ``}`` delimited references to things from the
-    ``kwargs``. For example:
+    ``message`` argument is a format string using PEP3101-style
+    references to things from the ``kwargs``. Note that there are also
+    the following keys added to the ``kwargs``: log_time and log_level.
+
+    For example::
 
         class MyThing(object):
-            logger = txaio.make_logger()
+            log = txaio.make_logger()
 
             def something_interesting(self, things=dict(one=1, two=2)):
                 try:
-                    logger.debug("Calling with {things[one]}", things=things)
-                    result = self._method_call(things['one'])
-                    logger.info("Got '{result}'.", result=result)
+                    self.log.debug("Called with {things[one]}", things=things)
+                    result = self._method_call()
+                    self.log.info("Got '{result}'.", result=result)
                 except Exception:
-                    # for .failure, the kwargs will magically contain
-                    # ``log_failure`` in this case, which is an
-                    # IFailedFuture. A stack-trace will be printed.
-                    logger.failure("Sadness: {log_failure.value}")
+                    fail = txaio.create_future_error()
+                    self.log.critical(txaio.failure_format_traceback(fail))
 
-    Recommendation: use ``.failure()`` for unexpected errors, and
-    ``.critical()`` for errors a user might reasonably see.
+    The philsophy behind txaio's interface is fairly similar to
+    Twisted's logging APIs after version 15. See `Twisted's
+    documentation
+    <http://twistedmatrix.com/documents/current/core/howto/logger.html>`_
+    for details.
     """
 
 # stdlib notes:
@@ -76,8 +87,9 @@ class ILogger(object):
 # things in Twisted's event:
 # - log_level
 # - log_failure (sometimes?)
-# - log_message
-# - log_source (sometimes?)
+# - log_format (can be None)
+# - log_source (sometimes? no, always, but sometimes None)
+# - log_namespace
 #
 # .warn not warning!
 
@@ -87,7 +99,7 @@ class ILogger(object):
     def error(self, message, **kwargs):
         "log a error-level message"
 
-    def warning(self, message, **kwargs):
+    def warn(self, message, **kwargs):
         "log a error-level message"
 
     def info(self, message, **kwargs):
@@ -98,20 +110,6 @@ class ILogger(object):
 
     def trace(self, message, **kwargs):
         "log a trace-level message"
-
-    def failure(self, message, **kwargs):
-        """
-        Log an exception, at level critical. Call with ``except:`` block.
-
-        This also logs a stack-trace (in addition to the message
-        provided).  As such, it is intended for unexpected errors.
-
-        A key ``log_failure`` (an instance of IFailedFuture) is
-        available for formatting the message
-        (e.g. "{log_failure.value}").  This IFailedFuture wraps the
-        current exception, so you **MAY ONLY CALL** .failure within an
-        ``except:`` block.
-        """
 
 
 @six.add_metaclass(abc.ABCMeta)

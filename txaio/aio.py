@@ -28,12 +28,13 @@ from __future__ import absolute_import, print_function
 
 import sys
 import time
-from datetime import datetime
+import weakref
 import functools
 import traceback
 import logging
+from datetime import datetime
 
-from txaio.interfaces import IFailedFuture, ILogger
+from txaio.interfaces import IFailedFuture, ILogger, log_levels
 from txaio import _Config
 
 import six
@@ -59,6 +60,8 @@ except ImportError:
 config = _Config()
 config.loop = asyncio.get_event_loop()
 _stderr, _stdout = sys.stderr, sys.stdout
+_loggers = []  # list of weak-references of each logger we've created
+_log_level = None  # non-None if we've called start_logging()
 
 using_twisted = False
 using_asyncio = True
@@ -96,33 +99,39 @@ class FailedFuture(IFailedFuture):
 
 # API methods for txaio, exported via the top-level __init__.py
 
+def _log(logger, level, msg, **kwargs):
+    kwargs['log_time'] = time.time()
+    kwargs['log_level'] = level
+    kwargs['log_message'] = msg
+    # NOTE: turning kwargs into a single "argument which
+    # is a dict" on purpose, since a LogRecord only keeps
+    # args, not kwargs.
+    getattr(logger._logger, level)(msg, kwargs)
+
+def _no_op(*args, **kw):
+    pass
 
 class _TxaioLogWrapper(ILogger):
     def __init__(self, logger):
         self._logger = logger
+        self._set_level('trace')
+        return
+        if _log_level is None:
+            self._set_level('info')
+        else:
+            self._set_level(_log_level)
 
-        for name in ['critical', 'info']:
-            def _log(msg, **kwargs):
-                # NOTE: turning kwargs into a single "argument which
-                # is a dict" on purpose, since a LogRecord only keeps
-                # args, not kwargs.
-                kwargs['log_time'] = time.time()
-                kwargs['log_level'] = name
-                kwargs['log_message'] = msg
-                getattr(self._logger, name)(msg, kwargs)
-            setattr(self, name, _log)
-
-    def failure(self, message, **kwargs):
-        kwargs['log_failure'] = FailedFuture(*sys.exc_info())
-        kwargs['log_level'] = 'critical'
-        kwargs['log_message'] = message
-        kwargs['log_time'] = time.time()
-        # we really do want kwargs to become a single argument-that's a
-        # dict here.
-        self._logger.critical(message, kwargs)
-        for line in traceback.format_exception(*sys.exc_info()):
-            kwargs['log_message'] = line
-            self._logger.critical(line, kwargs)
+    def _set_level(self, level):
+        from txaio.interfaces import log_levels
+        target_level = log_levels.index(level)
+        # this binds either _log or _no_op above to this instance,
+        # depending on the desired level.
+        for (idx, name) in enumerate(log_levels):
+            if idx <= target_level:
+                log_method = functools.partial(_log, self, name)
+            else:
+                log_method = _no_op
+            setattr(self, name, log_method)
 
 
 class _TxaioFileHandler(logging.Handler):
@@ -141,11 +150,34 @@ class _TxaioFileHandler(logging.Handler):
 
 
 def make_logger():
-    logger = logging.getLogger()
-    return _TxaioLogWrapper(logger)
+    logger = _TxaioLogWrapper(logging.getLogger())
+    # remember this so we can set their levels properly once
+    # start_logging is actually called.
+    if _log_level is None:
+        _loggers.append(weakref.ref(logger))
+    return logger
 
 
-def start_logging(out=None):
+def start_logging(out=None, level='info'):
+    """
+    Begin logging.
+
+    :param out: if provided, a file-like object to which logging will be emitted.
+    :param level: the maximum log-level to emit (a string)
+    """
+    global _log_level
+    if _log_level is not None:
+        raise RuntimeError("start_logging() may only be called once")
+    _log_level = level
+
+    from txaio.interfaces import log_levels
+    if level not in log_levels:
+        raise RuntimeError(
+            "Invalid log level '{}'; valid are: {}".format(
+                level, ', '.join(log_levels)
+            )
+        )
+
     if out is None:
         out = _stdout
     handler = _TxaioFileHandler(out)
@@ -153,7 +185,21 @@ def start_logging(out=None):
     # note: Don't need to call basicConfig() or similar, because we've
     # now added at least one handler to the root logger
     logging.raiseExceptions = True  # FIXME
-    logging.getLogger().setLevel(logging.DEBUG)  # FIXME
+    level_to_stdlib = {
+        'critical': logging.CRITICAL,
+        'error': logging.ERROR,
+        'warn': logging.WARNING,
+        'info': logging.INFO,
+        'debug': logging.DEBUG,
+        'trace': logging.DEBUG,
+    }
+    logging.getLogger().setLevel(level_to_stdlib[level])
+    # make sure any loggers we created before now have their log-level
+    # set (any created after now will get it from _log_level
+    for ref in _loggers:
+        instance = ref()
+        if instance is not None:
+            instance._set_level('trace')#level)
 
 
 def failure_message(fail):
