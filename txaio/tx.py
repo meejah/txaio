@@ -253,7 +253,7 @@ def start_logging(out=None, level='info'):
         return
 
     if out is None:
-        out = _stdout
+        out = _stdout  # noqa
 
     if _loggers is not None:
         for ref in _loggers:

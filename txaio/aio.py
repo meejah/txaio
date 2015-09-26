@@ -183,7 +183,7 @@ def start_logging(out=None, level='info'):
     _log_level = level
 
     if out is None:
-        out = _stdout
+        out = _stdout  # noqa
     handler = _TxaioFileHandler(out)
     logging.getLogger().addHandler(handler)
     # note: Don't need to call basicConfig() or similar, because we've

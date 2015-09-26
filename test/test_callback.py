@@ -36,7 +36,9 @@ def test_default_resolve():
     def cb(f):
         results.append(f)
     txaio.add_callbacks(f, cb, None)
+    assert not txaio.is_called(f)
     txaio.resolve(f)
+    assert txaio.is_called(f)
 
     run_once()
 
