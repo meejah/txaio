@@ -45,6 +45,19 @@ from txaio._iotype import guess_stream_needs_encoding
 from txaio import _Config
 from txaio._common import _BatchedTimer
 
+# if we're running on Python 3.5+ then we need to support async-def
+# and await syntax, which means we need to introspect incoming
+# callables in as_future
+try:
+    from asyncio import iscoroutinefunction
+    from twisted.internet.defer import ensureDeferred
+except ImportError:
+    # we've either got no asyncio or no ensureDeferred so our
+    # async/await support can't work.
+    def iscoroutinefunction(f):
+        print("placeholder", f)
+        return False
+
 import six
 
 using_twisted = True
@@ -405,7 +418,11 @@ def create_future_error(error=None):
 
 
 def as_future(fun, *args, **kwargs):
-    return maybeDeferred(fun, *args, **kwargs)
+    if iscoroutinefunction(fun):
+        d = ensureDeferred(fun(*args, **kwargs))
+    else:
+        d = maybeDeferred(fun, *args, **kwargs)
+    return d
 
 
 def is_future(obj):
@@ -413,6 +430,7 @@ def is_future(obj):
 
 
 def call_later(delay, fun, *args, **kwargs):
+    # needs a test for async/await
     return IReactorTime(_get_loop()).callLater(delay, fun, *args, **kwargs)
 
 
