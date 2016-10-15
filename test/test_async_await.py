@@ -45,3 +45,12 @@ def test_as_future_async(framework):
         print("Skipping", e)
         pytest.skip("Only for Python3.5 + Twisted: {}".format(e))
 
+def test_as_future_async_call_later(framework):
+    try:
+        from asyncio import iscoroutinefunction
+        from twisted.internet.defer import ensureDeferred
+        if txaio.using_twisted:
+            from async_await_tests import _test_as_future_async_call_later
+            return _test_as_future_async_call_later(framework)
+    except ImportError as e:
+        pytest.skip("Only for Python3.5 + Twisted: {}".format(e))

@@ -430,8 +430,12 @@ def is_future(obj):
 
 
 def call_later(delay, fun, *args, **kwargs):
-    # needs a test for async/await
-    return IReactorTime(_get_loop()).callLater(delay, fun, *args, **kwargs)
+    if iscoroutinefunction(fun):
+        def _run_fun(*a, **kw):
+            return ensureDeferred(fun(*a, **kw))
+    else:
+        _run_fun = fun
+    return IReactorTime(_get_loop()).callLater(delay, _run_fun, *args, **kwargs)
 
 
 def make_batched_timer(bucket_seconds, chunk_size=100):

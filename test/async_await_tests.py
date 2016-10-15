@@ -32,11 +32,11 @@
 import pytest
 import txaio
 
+from txaio.testutil import replace_loop
 from util import run_once
 
 
 def _test_as_future_async(framework):
-    print("doing the thing", framework, txaio.using_twisted)
     # this test only makes sense for Python3.5+ and Twisted
     txaio.use_twisted()
     
@@ -76,3 +76,21 @@ def _test_as_future_async(framework):
     assert len(calls) == 2, "expected 2 calls to succeed"
     assert len(results) == 1, "expected a single result"
     assert results[0] == 'foo'
+
+
+def _test_as_future_async_call_later(framework):
+    from twisted.internet.task import Clock
+    new_loop = Clock()
+    calls = []
+    with replace_loop(new_loop) as fake_loop:
+        async def foo(*args, **kw):
+            calls.append((args, kw))
+
+        delay = txaio.call_later(1, foo, 5, 6, 7, foo="bar")
+        assert len(calls) == 0
+        assert hasattr(delay, 'cancel')
+        fake_loop.advance(2)
+
+        assert len(calls) == 1
+        assert calls[0][0] == (5, 6, 7)
+        assert calls[0][1] == dict(foo="bar")
