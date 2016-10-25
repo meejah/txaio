@@ -36,15 +36,20 @@ from txaio.testutil import replace_loop
 from util import run_once
 
 
+# note: these are all prefixed with '_' and in a module that doesn't
+# start with 'test_' because they're only *imported* in
+# test_async_await.py after we confirm we're on Python3.5+
+
+
 def _test_as_future_async(framework):
     # this test only makes sense for Python3.5+ and Twisted
     txaio.use_twisted()
-    
+
     calls = []
     results = []
     errors = []
     futures = []
-    
+
     async def method0(*args, **kw):
         calls.append(('method0', args, kw))
         d = txaio.create_future()

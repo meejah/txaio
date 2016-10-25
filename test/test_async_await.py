@@ -31,11 +31,10 @@ import txaio
 # must perform the above import test before even trying to read the
 # file (beacuse "async def foo" is a syntax error before Python 3.5)
 
+
 def test_as_future_async(framework):
     print("here we go")
     try:
-        from asyncio import iscoroutinefunction
-        from twisted.internet.defer import ensureDeferred
         if txaio.using_twisted:
             from async_await_tests import _test_as_future_async
             return _test_as_future_async(framework)
@@ -45,10 +44,9 @@ def test_as_future_async(framework):
         print("Skipping", e)
         pytest.skip("Only for Python3.5 + Twisted: {}".format(e))
 
+
 def test_as_future_async_call_later(framework):
     try:
-        from asyncio import iscoroutinefunction
-        from twisted.internet.defer import ensureDeferred
         if txaio.using_twisted:
             from async_await_tests import _test_as_future_async_call_later
             return _test_as_future_async_call_later(framework)
