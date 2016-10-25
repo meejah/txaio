@@ -57,7 +57,6 @@ def _test_as_future_async(framework):
         return await method1(d)
 
     async def method1(d):
-        print("about to await", d)
         x = await d
         calls.append(('method1', x))
         return x
